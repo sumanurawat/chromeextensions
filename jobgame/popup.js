@@ -1,9 +1,10 @@
+// filepath: /Users/sumanurawat/Documents/GitHub/chromeextensions/jobgame/popup.js
 document.addEventListener('DOMContentLoaded', function() {
   const analyzeButton = document.getElementById('analyzeButton');
   const resultsDiv = document.getElementById('results');
 
   // Display latest result on popup load (for Task 3.5)
-  // displayLatestResult(); // We'll uncomment this later
+  displayLatestResult();
 
   if (analyzeButton) {
     analyzeButton.addEventListener('click', () => {
@@ -18,12 +19,12 @@ document.addEventListener('DOMContentLoaded', function() {
           return;
         }
         console.log('Response from background:', response);
-        // We will display actual results later (Task 3.5)
-        // For now, just confirm receipt
-        if (response && response.status) {
-           // resultsDiv.innerText = `Background status: ${response.status}`; // Optional feedback
-        } else {
-           resultsDiv.innerText = 'Received unexpected response from background.';
+        
+        if (response && response.status === "processing") {
+          resultsDiv.innerText = "Processing job description...";
+          // The actual results will be displayed when analysisComplete message is received
+        } else if (response && response.status === "error") {
+          resultsDiv.innerText = `Error: ${response.message || "Unknown error"}`;
         }
       });
     });
@@ -31,24 +32,37 @@ document.addEventListener('DOMContentLoaded', function() {
     console.error("Analyze button not found.");
   }
 
-  // Function to display results (for Task 3.5)
-  /*
-  function displayLatestResult() {
-    chrome.storage.local.get('lastAnalysisResult', (result) => {
-      if (resultsDiv) {
-        resultsDiv.innerText = result.lastAnalysisResult || 'Click "Analyze Job Page" on a job description page.';
-      }
-    });
-  }
-  */
-
-  // Listener for updates from background (for Task 3.5)
-  /*
+  // Listen for messages from the background script
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    console.log("Message received in popup:", message);
+    
     if (message.action === "analysisComplete") {
-      console.log("Popup received analysis complete message.");
+      // Display the latest analysis result when notified
       displayLatestResult();
+    } else if (message.action === "analysisError") {
+      resultsDiv.innerText = `Error: ${message.error || "Unknown error"}`;
     }
   });
-  */
 });
+
+// Function to display the latest analysis result from storage
+function displayLatestResult() {
+  const resultsDiv = document.getElementById('results');
+  
+  chrome.storage.local.get('lastAnalysisResult', (result) => {
+    if (chrome.runtime.lastError) {
+      console.error("Error retrieving results:", chrome.runtime.lastError.message);
+      return;
+    }
+    
+    if (result.lastAnalysisResult) {
+      resultsDiv.innerText = result.lastAnalysisResult;
+    } else {
+      // Only show if not in the middle of an analysis
+      if (resultsDiv.innerText !== 'Analyzing...' && 
+          !resultsDiv.innerText.startsWith('Processing')) {
+        resultsDiv.innerText = "No analysis results yet. Click 'Analyze Job Page' to begin.";
+      }
+    }
+  });
+}
