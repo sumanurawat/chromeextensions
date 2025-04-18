@@ -77,15 +77,51 @@ function extractJobDescription() {
 // Extract form fields (names and labels) on the page
 function extractFormFields() {
   const fields = {};
-  document.querySelectorAll('form input[name], form textarea[name], form select[name]').forEach(el => {
+  // Look for inputs both within forms and directly on the page (many modern sites don't use <form> tags)
+  document.querySelectorAll('input[name], textarea[name], select[name]').forEach(el => {
+    // Skip hidden fields, submit buttons, and other non-fillable inputs
+    if (el.type === 'hidden' || el.type === 'submit' || el.type === 'button' || 
+        el.type === 'file' || el.type === 'image' || el.type === 'reset' || 
+        el.readOnly || el.disabled) {
+      return;
+    }
+
     let label = '';
     // Try to find associated label by for attribute
     if (el.id) {
       const lab = document.querySelector(`label[for="${el.id}"]`);
       if (lab) label = lab.innerText.trim();
     }
+
+    // Try to find a parent label (for cases where the input is inside the label)
+    if (!label) {
+      const parentLabel = el.closest('label');
+      if (parentLabel) {
+        // Get text but exclude text from the input itself
+        const clone = parentLabel.cloneNode(true);
+        Array.from(clone.querySelectorAll('input, select, textarea')).forEach(input => input.remove());
+        label = clone.textContent.trim();
+      }
+    }
+
+    // Try to find nearby label or text
+    if (!label) {
+      // Look for nearby div or span with descriptive text
+      const parent = el.parentElement;
+      const siblings = parent ? Array.from(parent.children) : [];
+      for (const sibling of siblings) {
+        if ((sibling.tagName === 'DIV' || sibling.tagName === 'SPAN' || sibling.tagName === 'LABEL') && 
+            sibling !== el && sibling.textContent.trim()) {
+          label = sibling.textContent.trim();
+          break;
+        }
+      }
+    }
+
     // Fallback to placeholder or name
     if (!label) label = el.placeholder || el.name;
+    
+    console.log(`Found form field: ${el.name} (${label})`);
     fields[el.name] = label;
   });
   return fields;
@@ -110,13 +146,84 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'populateForm') {
     console.log('Content script received populateForm', message.suggestions);
     const suggestions = message.suggestions || {};
+    
+    // For debugging - log all form fields found on the page
+    console.log('All form fields on page:');
+    document.querySelectorAll('input[name], textarea[name], select[name]').forEach(el => {
+      console.log(`- ${el.tagName} name="${el.name}" id="${el.id || ''}" type="${el.type || ''}" placeholder="${el.placeholder || ''}"`);
+    });
+    
+    // Try to fill each field with its suggested value
     Object.entries(suggestions).forEach(([name, value]) => {
-      const el = document.querySelector(`[name="${name}"]`);
+      console.log(`Trying to fill field "${name}" with value "${value}"`);
+      
+      // Try multiple selector strategies to find the field
+      const selectors = [
+        `[name="${name}"]`, // Exact name match
+        `[id="${name}"]`,   // ID might match name
+        `[name*="${name}"]`, // Name contains our name
+        `[id*="${name}"]`,   // ID contains our name
+        `input[placeholder*="${name}"]`, // Placeholder contains the name (case sensitive)
+        `textarea[placeholder*="${name}"]`
+      ];
+      
+      // Try each selector
+      let el = null;
+      for (const selector of selectors) {
+        el = document.querySelector(selector);
+        if (el) {
+          console.log(`Found field using selector: ${selector}`);
+          break;
+        }
+      }
+      
+      // If found, fill the field
       if (el) {
-        el.value = value;
+        try {
+          // For select elements
+          if (el.tagName === 'SELECT') {
+            // Try to find an option that matches or contains our value
+            let found = false;
+            for (const option of el.options) {
+              if (option.text.toLowerCase().includes(String(value).toLowerCase())) {
+                el.value = option.value;
+                found = true;
+                break;
+              }
+            }
+            
+            // If no match, just set the value directly
+            if (!found) {
+              el.value = value;
+            }
+          } 
+          // For checkboxes and radio buttons
+          else if (el.type === 'checkbox' || el.type === 'radio') {
+            // Convert value to boolean or treat "yes", "true", etc as checked
+            const checkValue = String(value).toLowerCase();
+            el.checked = (checkValue === 'true' || checkValue === 'yes' || checkValue === 'on' || value === true);
+          } 
+          // Regular inputs and textareas
+          else {
+            el.value = value;
+            
+            // Trigger change event to ensure any listeners know the field was updated
+            const event = new Event('input', { bubbles: true });
+            el.dispatchEvent(event);
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+          console.log(`Successfully set value for ${name}`);
+        } catch (err) {
+          console.error(`Error setting value for ${name}:`, err);
+        }
+      } else {
+        console.warn(`Could not find field with name "${name}" to populate`);
       }
     });
-    return;
+    
+    // Confirm form filling is complete
+    console.log('Form population complete');
+    return true;
   }
 
   if (message.action === 'extractJobDescription') {
